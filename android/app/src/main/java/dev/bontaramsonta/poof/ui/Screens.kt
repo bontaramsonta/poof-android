@@ -39,7 +39,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.bontaramsonta.poof.core.Countries
 import dev.bontaramsonta.poof.core.FailReason
@@ -116,6 +119,9 @@ private fun TokenScreen(onSave: (String) -> Unit) {
         token, { token = it },
         label = { Text("Token") },
         singleLine = true,
+        // Password type: the keyboard neither learns nor suggests the token.
+        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
+        visualTransformation = PasswordVisualTransformation(),
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(Modifier.height(16.dp))
