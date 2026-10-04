@@ -264,6 +264,10 @@ func TestFailureBeforePublicIPTerminates(t *testing.T) {
 	if hs.fleet.instances[hs.fleet.terminated[0]].State != "terminated" {
 		t.Error("instance left running")
 	}
+	got := decode[map[string]string](t, resp)
+	if got["region"] != "ap-south-1" || got["instanceId"] != hs.fleet.terminated[0] {
+		t.Errorf("failure body %v lacks region and instance ID", got)
+	}
 }
 
 func TestCreateRejectsBadInput(t *testing.T) {
