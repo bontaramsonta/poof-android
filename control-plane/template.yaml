@@ -137,9 +137,7 @@ Resources:
       Architectures: [arm64]
       MemorySize: 128
       Timeout: 60
-      # TODO: restore ReservedConcurrentExecutions: 1 (spec §4.1) once the
-      # account's concurrency quota is raised above 10; AWS refuses any
-      # reservation that leaves fewer than 10 unreserved.
+      ReservedConcurrentExecutions: 1
       Role: !GetAtt ControlPlaneRole.Arn
       LoggingConfig:
         LogGroup: !Ref ControlPlaneLogGroup
