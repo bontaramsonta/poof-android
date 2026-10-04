@@ -13,4 +13,4 @@ _Avoid_: backend, server, API
 - **Mode collapses.** The Android client has only system mode. "VPN" always means the whole phone.
 - **One live phone Exit.** At most one phone-launched Exit exists at a time; the Control plane refuses a second launch. Exits from the Mac CLI do not count.
 - **No Nuke.** The Dead-man's switch is the only backstop against an orphaned Exit.
-- **A Session can outlive the app.** On the Mac the process *is* the Session. On the phone, the Session lasts until Disconnect or its Exit dies; it survives the app being killed or the phone rebooting.
+- **A Session can outlive the app.** On the Mac the process *is* the Session. On the phone, a Session is the life of its stored Session record: it begins when the Control plane confirms the launch and ends when the record is deleted (Disconnect, revoke, failed launch, or finding the Exit gone). The tunnel is a state inside it.
