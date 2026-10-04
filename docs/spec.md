@@ -41,13 +41,13 @@ These land in poof before the control plane is built. poof-android pins the resu
 
 1. **Export the packages.** `internal/provision` and `internal/wgkey` become public packages in the poof module (e.g. `github.com/bontaramsonta/poof/exit` and `.../wgkey`). The CLI adopts them too.
 2. **Launch takes extra instance tags.** The caller MUST be able to add `poof:client=android` next to `poof=1` and `Name`. All instance tags MUST be set in the `RunInstances` request (`TagSpecifications`), never by a later `CreateTags`.
-3. **One persistent security group per region.** Fixed name, tagged `poof=1` at creation, inbound UDP 51820 only. Launch ensures it: look it up by name, create it if missing, re-add the rule if it was removed. It is never deleted. This replaces the per-launch group, which leaked groups on every teardown.
+3. **One persistent security group per region.** Named `poof-wireguard`, tagged `poof=1` at creation, inbound UDP 51820 only. Launch ensures it: look it up by name, create it if missing, re-add the rule if it was removed. It is never deleted. This replaces the per-launch group, which leaked groups on every teardown.
 4. **Launch passes no key pair and no instance profile.** True today; the IAM policy depends on it.
 5. **Drop `poof nuke`.** The Dead-man's switch is the only backstop for orphaned Exits.
 6. **Swap before `dnf`.** Merge the 1 GB swap file from branch `phone-test-mode` (30bebf1) to `main`. Without it, `dnf` is intermittently OOM-killed on the 512 MB nano and the Exit never answers.
 7. **Tag a release** for poof-android to pin.
 
-**Cross-client invariants** (version skew between the repos is tolerated as long as these hold): the `poof=1` tag, the security-group name, shutdown-means-terminate, the 5 min Dead-man's switch threshold.
+**Cross-client invariants** (version skew between the repos is tolerated as long as these hold): the `poof=1` tag, the security-group name `poof-wireguard`, shutdown-means-terminate, the 5 min Dead-man's switch threshold.
 
 ## 4. Control plane
 
@@ -248,7 +248,8 @@ Unchanged from poof, rendered from the same template [#5, #13].
 - **Tunnel:** `com.wireguard.android:tunnel` (`GoBackend`). It ships prebuilt native libraries; no NDK.
 - **HTTP:** OkHttp + kotlinx.serialization.
 - **Secrets:** an Android Keystore AES-GCM key encrypts the bearer token and the Session record. `EncryptedSharedPreferences` is deprecated and not used.
-- **Build:** `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug`. Sideload over `adb`.
+- **Build:** `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleRelease`. Sideload over `adb`.
+- **Signing:** the `release` build type is signed with the local debug key (`signingConfig = signingConfigs.getByName("debug")`). This gives a non-debuggable, R8-optimized APK with no release keystore to manage. If the debug key changes (e.g. a new Mac), uninstall first and paste the token again. `assembleDebug` stays for development.
 
 ### 6.2 Tunnel [#17, #18]
 
@@ -353,14 +354,12 @@ Each step ends with its tests green.
 4. **App core** (pure Kotlin): the tunnel config builder, the Session state machine, the API client, and the Keystore-encrypted store for the token and the Session record. *Test:* the JVM unit tests in §7.
 5. **Tunnel service:** `PoofVpnService` (`systemExempted`) holding `GoBackend`, VPN consent, `onRevoke` stop-then-`DELETE`, stats `StateFlow`, the two notifications and their Disconnect action, the network-loss check. *Test:* checklist steps 2–5 on the phone, with a bare debug screen.
 6. **Screens:** token setup, Country picker, connecting, connected, failure (with region and instance ID), 409, still running, expired; the Reconnect/Destroy flow on open. *Test:* the full [e2e checklist](testing/e2e-checklist.md).
-7. **Ship:** `./gradlew assembleDebug`, sideload, paste the token with `token.sh`. Update the README status.
+7. **Ship:** `./gradlew assembleRelease` (signed with the debug key), sideload, paste the token with `token.sh`. Update the README status.
 
 ## 9. Assumptions made while writing
 
 These were not decided on the map. They are the smallest choices that let the build proceed; change them freely.
 
-- **Install a debug build.** Release signing was dropped with CI. A single sideloaded device needs no release keystore.
 - **`android:allowBackup="false"`.** The scaffold has `true`. Backed-up encrypted blobs are useless without the device-bound Keystore key, and backups go against "nothing is remembered".
 - **Country display names live in the app.** `GET /countries` returns poof's lowercase names; the app maps them to display names ("USA", "Britain").
 - **Lambda timeout 60 s, 128 MB.** `POST` normally takes ~8 s; the timeout bounds a stuck public-IP wait. The app's OkHttp call timeout matches it.
-- **The security-group name** is whatever poof's exported package fixes in step 1.
