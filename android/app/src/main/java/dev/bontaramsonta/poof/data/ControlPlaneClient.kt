@@ -20,8 +20,16 @@ import okhttp3.Response
 /** The control plane rejected the bearer token. */
 class UnauthorizedException : IOException("the control plane rejected the token")
 
-/** Any other non-success answer. [message] is the control plane's error text. */
-class ControlPlaneException(val status: Int, message: String) : IOException(message)
+/**
+ * Any other non-success answer. [message] is the control plane's error text;
+ * [region] and [instanceId] are set when a launched instance was terminated.
+ */
+class ControlPlaneException(
+    val status: Int,
+    message: String,
+    val region: String? = null,
+    val instanceId: String? = null,
+) : IOException(message)
 
 sealed interface CreateResult {
     data class Created(
@@ -100,7 +108,10 @@ class ControlPlaneClient(
                 status in accept -> return parse(status, text)
                 status == 401 -> throw UnauthorizedException()
                 status == 429 && attempt < backoffMs.size -> delay(backoffMs[attempt++])
-                else -> throw ControlPlaneException(status, errorText(text) ?: "HTTP $status")
+                else -> {
+                    val err = runCatching { json.decodeFromString<ErrorBody>(text) }.getOrNull()
+                    throw ControlPlaneException(status, err?.error ?: "HTTP $status", err?.region, err?.instanceId)
+                }
             }
         }
     }
@@ -108,9 +119,6 @@ class ControlPlaneClient(
     private inline fun <reified T> decode(text: String): T = json.decodeFromString(text)
 
     private fun Response.bodyText(): String = body.string()
-
-    private fun errorText(text: String): String? =
-        runCatching { json.decodeFromString<ErrorBody>(text).error }.getOrNull()
 
     @Serializable private data class CountriesBody(val countries: List<String>)
     @Serializable private data class CreateBody(val country: String, val clientPublicKey: String)
@@ -127,7 +135,11 @@ class ControlPlaneClient(
         val publicIp: String,
     )
     @Serializable private data class StateBody(val state: String)
-    @Serializable private data class ErrorBody(val error: String)
+    @Serializable private data class ErrorBody(
+        val error: String,
+        val region: String? = null,
+        val instanceId: String? = null,
+    )
 
     companion object {
         private val JSON = "application/json".toMediaType()

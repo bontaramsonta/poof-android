@@ -75,13 +75,15 @@ class ControlPlaneClientTest {
     }
 
     @Test fun serverErrorCarriesMessage() = runTest {
-        respond(502, """{"error":"the Exit got no public IP; it was terminated"}""")
+        respond(502, """{"error":"the Exit got no public IP; it was terminated","region":"ap-south-1","instanceId":"i-0bad"}""")
         try {
             client.createExit("india", "Y2xpZW50")
             fail("expected ControlPlaneException")
         } catch (e: ControlPlaneException) {
             assertEquals(502, e.status)
             assertEquals("the Exit got no public IP; it was terminated", e.message)
+            assertEquals("ap-south-1", e.region)
+            assertEquals("i-0bad", e.instanceId)
         }
     }
 

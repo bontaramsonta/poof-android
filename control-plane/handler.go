@@ -261,7 +261,12 @@ func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRe
 		if terr := r.Terminate(context.WithoutCancel(ctx), id); terr != nil {
 			rl.err = errors.Join(err, terr)
 		}
-		return errorResponse(http.StatusBadGateway, "the Exit got no public IP; it was terminated")
+		// Region and ID let the owner read the console output from the Mac.
+		return jsonResponse(http.StatusBadGateway, map[string]string{
+			"error":      "the Exit got no public IP; it was terminated",
+			"region":     region,
+			"instanceId": id,
+		})
 	}
 
 	return jsonResponse(http.StatusCreated, createdExit{
