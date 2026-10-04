@@ -11,7 +11,7 @@ Does a connected Android phone go quiet long enough to trip the Exit's Dead-man'
 | Parameter | Value |
 |---|---|
 | Client | Official WireGuard Android app (`com.wireguard.android`): the same tunnel library poof-android uses |
-| Phone | Owner's phone (model and Android version not recorded) |
+| Phone | OnePlus 15R, Android 16 |
 | Client config | Address `10.66.0.2/32`, DNS `1.1.1.1`, AllowedIPs `0.0.0.0/0`, **PersistentKeepalive 25 s** (poof's own client value) |
 | Exit | `t4g.nano`, Amazon Linux 2023, Japan (`ap-northeast-1`), instance `i-0413f755a14cbcf04` |
 | Exit mode | poof phone-test mode: Dead-man's switch replaced by a 120 min hard stop; handshake age written to the serial console every 30 s |
@@ -42,7 +42,7 @@ The owner kept the existing threshold (5 min of handshake silence) after seeing 
 ## Limits: suspect these first if the switch trips
 
 - **Short runs.** Battery-only was observed for ~10 min. Deep sleep deepens over time (Doze maintenance windows grow), so a phone locked for an hour or more may produce longer gaps than ~198 s.
-- **One phone, one network.** OEM battery managers (Samsung, Xiaomi, …) can be more aggressive.
+- **One phone, one network.** OxygenOS's battery manager was in play here; other OEMs' managers (Samsung, Xiaomi, …) can be more aggressive. A different phone or OS update may behave differently.
 - **Battery Saver** was not tested.
 - **The WireGuard app, not poof-android.** Our app's foreground service and stats polling may keep the CPU awake differently.
 
