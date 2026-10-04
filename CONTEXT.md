@@ -12,3 +12,4 @@ _Avoid_: backend, server, API
 
 - **Mode collapses.** The Android client has only system mode. "VPN" always means the whole phone.
 - **One live Exit.** At most one Exit exists at a time; the Control plane refuses a second launch.
+- **No Nuke.** The Dead-man's switch is the only backstop against an orphaned Exit.
