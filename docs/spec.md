@@ -44,7 +44,7 @@ These land in poof before the control plane is built. poof-android pins the resu
 3. **One persistent security group per region.** Named `poof-wireguard`, tagged `poof=1` at creation, inbound UDP 51820 only. Launch ensures it: look it up by name, create it if missing, re-add the rule if it was removed. It is never deleted. This replaces the per-launch group, which leaked groups on every teardown.
 4. **Launch passes no key pair and no instance profile.** True today; the IAM policy depends on it.
 5. **Drop `poof nuke`.** The Dead-man's switch is the only backstop for orphaned Exits.
-6. **Swap before `dnf`.** Merge the 1 GB swap file from branch `phone-test-mode` (30bebf1) to `main`. Without it, `dnf` is intermittently OOM-killed on the 512 MB nano and the Exit never answers.
+6. **Swap before `dnf`.** Done: a 1 GB swap file is on poof `main` (b6f1721). Without it, `dnf` is intermittently OOM-killed on the 512 MB nano and the Exit never answers.
 7. **Tag a release** for poof-android to pin.
 
 **Cross-client invariants** (version skew between the repos is tolerated as long as these hold): the `poof=1` tag, the security-group name `poof-wireguard`, shutdown-means-terminate, the 5 min Dead-man's switch threshold.
@@ -348,7 +348,7 @@ Local runs only; no CI.
 
 Each step ends with its tests green.
 
-1. **poof changes** (in `~/p/poof`): export `exit` and `wgkey`; extra launch tags set in `RunInstances`; persistent security group with ensure; drop `nuke`; merge swap-before-dnf; adopt in the CLI. *Test:* poof's existing user-data tests (swap before dnf included), plus one `poof up` from the Mac. Tag a release.
+1. **poof changes** (in `~/p/poof`): export `exit` and `wgkey`; extra launch tags set in `RunInstances`; persistent security group with ensure; drop `nuke`; adopt in the CLI. *Test:* poof's existing user-data tests (swap before dnf included), plus one `poof up` from the Mac. Tag a release.
 2. **Control plane handlers** (`control-plane/`): Go module pinned to that release; token check, `GET /countries`, `POST /exits` with cap and cleanup, `GET`/`DELETE /exits/{region}/{id}`, `slog` lines. *Test:* the handler tests in §7 against the fake EC2.
 3. **Control plane deploy:** `template.yaml` with the function URL, reserved concurrency 1, the §4.4 role and the 7-day log group; `token.sh` with `--rotate`. `sam validate --lint`, then `sam build && sam deploy`. *Test:* with `curl`: `GET /countries`; `POST /exits` with a throwaway public key (the first real launch proves the IAM policy); a second `POST` → 409; `DELETE` → 204; no `poof:client=android` instance left.
 4. **App core** (pure Kotlin): the tunnel config builder, the Session state machine, the API client, and the Keystore-encrypted store for the token and the Session record. *Test:* the JVM unit tests in §7.
