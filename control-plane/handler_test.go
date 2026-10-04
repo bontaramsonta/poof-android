@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -214,6 +215,24 @@ func TestCreateReturnsExitAndTagsIt(t *testing.T) {
 	inst := hs.fleet.instances[got.InstanceID]
 	if inst.Tags["poof:client"] != "android" || inst.Tags["poof"] != "1" {
 		t.Errorf("launch tags = %v, want poof=1 and poof:client=android", inst.Tags)
+	}
+}
+
+func TestCreateAcceptsBase64Body(t *testing.T) {
+	hs := newHarness(t)
+	req := events.LambdaFunctionURLRequest{
+		RawPath:         "/exits",
+		Body:            base64.StdEncoding.EncodeToString([]byte(createBody("japan", clientKey(t)))),
+		IsBase64Encoded: true,
+		Headers:         map[string]string{"authorization": "Bearer " + testToken},
+	}
+	req.RequestContext.HTTP.Method = "POST"
+	resp, err := hs.h.Handle(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d: %s", resp.StatusCode, resp.Body)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -182,8 +183,17 @@ type existingExit struct {
 }
 
 func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRequest, rl *reqLog) events.LambdaFunctionURLResponse {
+	raw := []byte(req.Body)
+	if req.IsBase64Encoded {
+		// Function URLs base64 any body whose content type isn't textual.
+		decoded, err := base64.StdEncoding.DecodeString(req.Body)
+		if err != nil {
+			return errorResponse(http.StatusBadRequest, "body must be JSON {country, clientPublicKey}")
+		}
+		raw = decoded
+	}
 	var body createRequest
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		return errorResponse(http.StatusBadRequest, "body must be JSON {country, clientPublicKey}")
 	}
 	region, err := exit.RegionFor(body.Country)
