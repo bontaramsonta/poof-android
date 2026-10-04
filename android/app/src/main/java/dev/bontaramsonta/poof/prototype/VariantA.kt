@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -92,9 +94,9 @@ private fun ProgressA(country: String, step: Int, ip: String? = null) {
 private fun StepA(text: String, done: Boolean, active: Boolean) {
   Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
     when {
-      done -> Text("✓")
-      active -> CircularProgressIndicator(Modifier.height(18.dp), strokeWidth = 2.dp)
-      else -> Text("·")
+      done -> Text("✓", Modifier.width(18.dp))
+      active -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+      else -> Text("·", Modifier.width(18.dp))
     }
     Text(text)
   }
