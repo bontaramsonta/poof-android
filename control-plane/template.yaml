@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: poof-android control plane — launches and terminates phone Exits.
+
+Resources:
+  ControlPlaneLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/poof-control-plane
+      RetentionInDays: 7
+
+  ControlPlaneRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: poof-control-plane
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: OnlyCountryRegions
+                Effect: Deny
+                Action: ec2:*
+                Resource: "*"
+                Condition:
+                  StringNotEquals:
+                    aws:RequestedRegion:
+                      - us-east-1
+                      - eu-west-1
+                      - eu-central-1
+                      - eu-west-2
+                      - eu-west-3
+                      - ap-northeast-1
+                      - ap-northeast-2
+                      - ap-southeast-1
+                      - ap-southeast-2
+                      - ap-south-1
+                      - ca-central-1
+                      - sa-east-1
+              - Sid: LaunchPhoneExit
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*:*:instance/*
+                Condition:
+                  StringEquals:
+                    ec2:InstanceType: t4g.nano
+                    aws:RequestTag/poof: "1"
+                    aws:RequestTag/poof:client: android
+                  ForAllValues:StringEquals:
+                    aws:TagKeys: [poof, "poof:client", Name]
+              - Sid: LaunchFromAmazonAMI
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*::image/*
+                Condition:
+                  StringEquals:
+                    ec2:Owner: amazon
+              - Sid: LaunchIntoPoofGroup
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource: arn:aws:ec2:*:*:security-group/*
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/poof: "1"
+              - Sid: LaunchNetworkAndDisk
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource:
+                  - arn:aws:ec2:*:*:subnet/*
+                  - arn:aws:ec2:*:*:network-interface/*
+                  - arn:aws:ec2:*:*:volume/*
+              - Sid: TagOnlyAtCreate
+                Effect: Allow
+                Action: ec2:CreateTags
+                Resource:
+                  - arn:aws:ec2:*:*:instance/*
+                  - arn:aws:ec2:*:*:security-group/*
+                Condition:
+                  StringEquals:
+                    ec2:CreateAction: [RunInstances, CreateSecurityGroup]
+              - Sid: EnsureGroupCreate
+                Effect: Allow
+                Action: ec2:CreateSecurityGroup
+                Resource: arn:aws:ec2:*:*:security-group/*
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/poof: "1"
+              - Sid: EnsureGroupInDefaultVpc
+                Effect: Allow
+                Action: ec2:CreateSecurityGroup
+                Resource: arn:aws:ec2:*:*:vpc/*
+              - Sid: EnsureGroupRule
+                Effect: Allow
+                Action: ec2:AuthorizeSecurityGroupIngress
+                Resource: arn:aws:ec2:*:*:security-group/*
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/poof: "1"
+              - Sid: TerminatePhoneExitsOnly
+                Effect: Allow
+                Action: ec2:TerminateInstances
+                Resource: arn:aws:ec2:*:*:instance/*
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/poof:client: android
+              - Sid: Describe
+                Effect: Allow
+                Action: [ec2:DescribeInstances, ec2:DescribeSecurityGroups]
+                Resource: "*"
+              - Sid: ResolveAL2023
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+              - Sid: ReadToken
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/poof/control-plane/token
+              - Sid: OwnLogGroup
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${ControlPlaneLogGroup.Arn}:*
+
+  ControlPlaneFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: poof-control-plane
+      CodeUri: .
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      MemorySize: 128
+      Timeout: 60
+      ReservedConcurrentExecutions: 1
+      Role: !GetAtt ControlPlaneRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref ControlPlaneLogGroup
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  # Function URLs with AuthType NONE also need public lambda:InvokeFunction,
+  # restricted to calls that arrive through the URL.
+  ControlPlaneInvokeViaUrl:
+    Type: AWS::Lambda::Permission
+    Metadata:
+      cfn-lint:
+        config:
+          # SAM CLI 1.128's bundled cfn-lint predates InvokedViaFunctionUrl.
+          ignore_checks: [E3002]
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ControlPlaneFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  FunctionUrl:
+    Description: The control plane base URL. Paste it into the app with the token.
+    Value: !GetAtt ControlPlaneFunctionUrl.FunctionUrl
