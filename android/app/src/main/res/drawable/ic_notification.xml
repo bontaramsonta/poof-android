@@ -1,10 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher mark, cropped to fill the status-bar icon. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <!-- A shield: the Session's status-bar icon. -->
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M12,2L4,5v6c0,5.25 3.4,10.15 8,11.35C16.6,21.15 20,16.25 20,11V5L12,2z" />
+    android:viewportWidth="50"
+    android:viewportHeight="50">
+    <group
+        android:translateX="-24.1"
+        android:translateY="-29.85">
+        <clip-path android:pathData="M0,0h108v108h-108z M56.8,53a4.2,4.2 0 1,0 8.4,0a4.2,4.2 0 1,0 -8.4,0z M53.2,45.5a2.8,2.8 0 1,0 5.6,0a2.8,2.8 0 1,0 -5.6,0z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M33,62h24v12h-24z M33,62a12,12 0 1,1 24,0a12,12 0 1,1 -24,0z M25,66a8,8 0 1,1 16,0a8,8 0 1,1 -16,0z M48,65a9,9 0 1,1 18,0a9,9 0 1,1 -18,0z M41,54a10,10 0 1,1 20,0a10,10 0 1,1 -20,0z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M64.8,48a4.2,4.2 0 1,1 8.4,0a4.2,4.2 0 1,1 -8.4,0z M58.2,38.5a2.8,2.8 0 1,1 5.6,0a2.8,2.8 0 1,1 -5.6,0z" />
+    </group>
 </vector>
