@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -13,12 +15,21 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        // The SAM stack's FunctionUrl output, kept out of git in local.properties.
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use(::load)
+        }
+        val controlPlaneUrl = localProps.getProperty("poof.controlPlaneUrl", "")
+        buildConfigField("String", "CONTROL_PLANE_URL", "\"$controlPlaneUrl\"")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Sideloaded only: the local debug key avoids managing a release keystore.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -28,7 +39,7 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      buildConfig = true
       shaders = false
     }
 
@@ -76,6 +87,13 @@ dependencies {
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.espresso.core)
+
+  // Tunnel, control plane client
+  implementation(libs.wireguard.tunnel)
+  implementation(libs.okhttp)
+  implementation(libs.kotlinx.serialization.json)
+  implementation(libs.kotlinx.coroutines.android)
+  testImplementation(libs.okhttp.mockwebserver)
 
   // Navigation
   implementation(libs.androidx.navigation3.ui)
