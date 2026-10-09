@@ -21,7 +21,7 @@ Every decision here traces to a closed ticket on the [wayfinder map](https://git
 ## 2. Architecture
 
 ```
- Phone (poof-android)                     AWS, ap-south-1                    AWS, 12 regions
+ Phone (poof-android)                     AWS, ap-south-1                    AWS, 13 regions
  ┌──────────────────────────┐  HTTPS      ┌─────────────────────────┐  EC2   ┌──────────────────┐
  │ Compose UI               │  Bearer     │ Lambda (Go, arm64)      │  API   │ Exit (t4g.nano)  │
  │ Session store (Keystore) ├────────────►│ function URL, auth NONE ├───────►│ poof user-data   │
@@ -56,7 +56,8 @@ These land in poof before the control plane is built. poof-android pins the resu
 - **One Go Lambda** on `provided.al2023`, arm64, in **`ap-south-1`**, in the same AWS account as the CLI [#3, #11].
 - **Function URL with `AuthType: NONE`.** The bearer token is checked in code. API Gateway is ruled out by its 30 s request cap [#3].
 - **`ReservedConcurrentExecutions: 1`.** This guards the one-Exit cap against races and limits how fast a leaked token can be abused. A concurrent request gets 429 [#7].
-- **The 12 Countries**, all in default-enabled regions: usa `us-east-1`, ireland `eu-west-1`, germany `eu-central-1`, britain `eu-west-2`, france `eu-west-3`, japan `ap-northeast-1`, korea `ap-northeast-2`, singapore `ap-southeast-1`, australia `ap-southeast-2`, india `ap-south-1`, canada `ca-central-1`, brazil `sa-east-1`. The map lives in poof's exported package.
+- **The 13 Countries**: usa `us-east-1`, ireland `eu-west-1`, germany `eu-central-1`, britain `eu-west-2`, france `eu-west-3`, japan `ap-northeast-1`, korea `ap-northeast-2`, singapore `ap-southeast-1`, australia `ap-southeast-2`, india `ap-south-1`, canada `ca-central-1`, brazil `sa-east-1`, thailand `ap-southeast-7`. The map lives in poof's exported package.
+- **Thailand is an opt-in region.** It MUST be enabled on the account (`aws account enable-region`) before its Exits launch. The other 12 are enabled by default.
 - **Cost:** about $0 at this traffic.
 
 ### 4.2 Auth
@@ -67,12 +68,12 @@ Every request carries `Authorization: Bearer <token>`. The Lambda reads the toke
 
 | Endpoint | Does | Returns |
 |---|---|---|
-| `GET /countries` | the Country list from poof's exported map | the 12 Countries |
+| `GET /countries` | the Country list from poof's exported map | the 13 Countries |
 | `POST /exits` `{country, clientPublicKey}` | cap check → ensure the region's security group → generate the server keypair → render user-data → `RunInstances` → wait for a public IP | `201 {instanceId, region, publicIp, serverPublicKey}`; `409 {country, region, instanceId, publicIp}` of the existing phone Exit |
 | `GET /exits/{region}/{instanceId}` | `DescribeInstances` | `{state}` |
 | `DELETE /exits/{region}/{instanceId}` | `TerminateInstances` | `204`; refused unless the instance is tagged `poof:client=android` |
 
-- **Cap:** `POST` counts `pending` or `running` instances tagged `poof:client=android` across the 12 regions. One or more → 409. CLI Exits are not counted and run side by side.
+- **Cap:** `POST` counts `pending` or `running` instances tagged `poof:client=android` across the 13 regions. One or more → 409. CLI Exits are not counted and run side by side.
 - **Synchronous launch.** `POST` returns at the public IP (~7–8 s measured). The phone waits out the ~47 s boot itself. A failure before the public IP makes the Lambda terminate the instance, as poof's `Launch` does.
 - **Key custody** [#6]: the phone sends only its client public key. The Lambda generates the server keypair with poof's `wgkey`, renders user-data with `RenderUserData` (server private key, client public key, tunnel IPs `10.66.0.1`/`10.66.0.2`, port 51820, `IdleShutdownMin = 5`), and returns only the server public key. Only public keys cross the network.
 - **A leaked token cannot touch CLI Exits**: `DELETE` and the IAM role both act only on `poof:client=android`.
@@ -81,7 +82,7 @@ Every request carries `Authorization: Bearer <token>`. The Lambda reads the toke
 
 Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub` fills `${AWS::AccountId}`).
 
-- **Region guard:** a Deny on every EC2 call outside the 12 regions.
+- **Region guard:** a Deny on every EC2 call outside the 13 regions.
 - **Launch:** `t4g.nano` only, from Amazon-owned AMIs only. The request MUST tag `poof=1` and `poof:client=android`; allowed tag keys are `poof`, `poof:client`, `Name`. The security group must carry `poof=1`. No key pair, no `iam:PassRole`.
 - **Tags:** only during `RunInstances` or `CreateSecurityGroup`. Existing resources cannot be retagged, so a CLI Exit can never become terminable.
 - **Security group ensure:** create only with `poof=1`; add ingress only to groups tagged `poof=1`; no delete.
@@ -107,7 +108,8 @@ Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub
           "aws:RequestedRegion": [
             "us-east-1", "eu-west-1", "eu-central-1", "eu-west-2",
             "eu-west-3", "ap-northeast-1", "ap-northeast-2", "ap-southeast-1",
-            "ap-southeast-2", "ap-south-1", "ca-central-1", "sa-east-1"
+            "ap-southeast-2", "ap-south-1", "ca-central-1", "sa-east-1",
+            "ap-southeast-7"
           ]
         }
       }
@@ -315,7 +317,7 @@ The config is built in code with the library's `Interface`, `Peer` and `Config` 
 A stack of full screens. The theme follows the system dark mode (Material 3, dynamic colour on Android 12+). Prototype for reference only: branch `prototype/app-screen-flow`.
 
 1. **Token setup** (first run): paste the token, then Save.
-2. **Country picker:** a plain list of the 12 Countries, by display name ("USA", not "Usa"). Tapping a row connects at once.
+2. **Country picker:** a plain list of the 13 Countries, by display name ("USA", not "Usa"). Tapping a row connects at once.
 3. **Connecting:** "Connecting to <Country>" with two steps, *Launching an Exit* (`POST`) and *Waiting for it to answer (<ip>)* (first handshake), plus "This usually takes about a minute." The step spinner is a fixed 18 dp square; the step markers sit in one aligned column. No Cancel.
 4. **Connected:** a stats card (Exit IP, uptime, down, up, last handshake) and a full-width **Disconnect and destroy** button.
 5. **Failure** (handshake timeout or launch error): "Couldn't connect to <Country>". For a timeout: "The Exit never answered. It has been terminated." Whenever an instance existed, the screen shows its **region and instance ID, copyable**, so the owner can read the console from the Mac with `aws ec2 get-console-output` soon after. Then Back.

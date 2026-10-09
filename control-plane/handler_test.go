@@ -194,8 +194,8 @@ func TestCountries(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	got := decode[map[string][]string](t, resp)["countries"]
-	if len(got) != 12 {
-		t.Fatalf("got %d countries, want 12: %v", len(got), got)
+	if len(got) != 13 {
+		t.Fatalf("got %d countries, want 13: %v", len(got), got)
 	}
 }
 
