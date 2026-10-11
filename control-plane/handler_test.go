@@ -18,7 +18,16 @@ import (
 	"github.com/bontaramsonta/poof/wgkey"
 )
 
-const testToken = "s3cret-token-value-that-must-never-be-logged"
+const (
+	testToken  = "s3cret-token-value-that-must-never-be-logged"
+	otherToken = "an0ther-owners-token-that-must-never-be-logged"
+)
+
+// mine and theirs tag a phone Exit of testToken's Owner and of another.
+var (
+	mine   = map[string]string{"poof": "1", "poof:client": "android", "poof:owner": "sourav"}
+	theirs = map[string]string{"poof": "1", "poof:client": "android", "poof:owner": "vaisnav"}
+)
 
 // fakeEC2 is one region of a fake EC2. All regions share mu via fleet.
 type fakeEC2 struct {
@@ -134,8 +143,9 @@ func newHarness(t *testing.T) *harness {
 	return &harness{
 		t:     t,
 		fleet: fleet,
-		h:     NewHandler(testToken, fleet.region, slog.New(slog.NewJSONHandler(logs, nil))),
-		logs:  logs,
+		h: NewHandler(map[string]string{"sourav": testToken, "vaisnav": otherToken},
+			fleet.region, slog.New(slog.NewJSONHandler(logs, nil))),
+		logs: logs,
 	}
 }
 
@@ -213,8 +223,18 @@ func TestCreateReturnsExitAndTagsIt(t *testing.T) {
 		t.Errorf("serverPublicKey: %v", err)
 	}
 	inst := hs.fleet.instances[got.InstanceID]
-	if inst.Tags["poof:client"] != "android" || inst.Tags["poof"] != "1" {
-		t.Errorf("launch tags = %v, want poof=1 and poof:client=android", inst.Tags)
+	if inst.Tags["poof:client"] != "android" || inst.Tags["poof"] != "1" || inst.Tags["poof:owner"] != "sourav" {
+		t.Errorf("launch tags = %v, want poof=1, poof:client=android and poof:owner=sourav", inst.Tags)
+	}
+}
+
+func TestEachTokenResolvesToItsOwner(t *testing.T) {
+	hs := newHarness(t)
+	for token, owner := range map[string]string{testToken: "sourav", otherToken: "vaisnav"} {
+		got := decode[createdExit](t, hs.do("POST", "/exits", token, createBody("japan", clientKey(t))))
+		if tag := hs.fleet.instances[got.InstanceID].Tags["poof:owner"]; tag != owner {
+			t.Errorf("token of %s launched an Exit tagged poof:owner=%q", owner, tag)
+		}
 	}
 }
 
@@ -238,7 +258,7 @@ func TestCreateAcceptsBase64Body(t *testing.T) {
 
 func TestCapReturns409WithExistingExit(t *testing.T) {
 	hs := newHarness(t)
-	id := hs.fleet.add("eu-west-2", "running", map[string]string{"poof": "1", "poof:client": "android"})
+	id := hs.fleet.add("eu-west-2", "running", mine)
 
 	resp := hs.do("POST", "/exits", testToken, createBody("japan", clientKey(t)))
 	if resp.StatusCode != http.StatusConflict {
@@ -256,6 +276,14 @@ func TestCapIgnoresCLIExits(t *testing.T) {
 	hs.fleet.add("ap-northeast-1", "running", map[string]string{"poof": "1"})
 	if resp := hs.do("POST", "/exits", testToken, createBody("japan", clientKey(t))); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status %d, want 201 beside a CLI Exit", resp.StatusCode)
+	}
+}
+
+func TestCapIgnoresOtherOwnersExits(t *testing.T) {
+	hs := newHarness(t)
+	hs.fleet.add("ap-northeast-1", "running", theirs)
+	if resp := hs.do("POST", "/exits", testToken, createBody("japan", clientKey(t))); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201 beside another Owner's phone Exit", resp.StatusCode)
 	}
 }
 
@@ -309,9 +337,30 @@ func TestDeleteRefusesCLIExit(t *testing.T) {
 	}
 }
 
+func TestOtherOwnersExitIs403(t *testing.T) {
+	hs := newHarness(t)
+	id := hs.fleet.add("ap-south-1", "running", theirs)
+	untagged := hs.fleet.add("ap-south-1", "running", map[string]string{"poof": "1", "poof:client": "android"})
+	for _, i := range []string{id, untagged} {
+		for _, method := range []string{"GET", "DELETE"} {
+			if resp := hs.do(method, "/exits/ap-south-1/"+i, testToken, ""); resp.StatusCode != http.StatusForbidden {
+				t.Errorf("%s %s: status %d, want 403", method, hs.fleet.instances[i].Tags, resp.StatusCode)
+			}
+		}
+		if hs.fleet.instances[i].State != "running" {
+			t.Errorf("%v was terminated", hs.fleet.instances[i].Tags)
+		}
+	}
+	// A gone Exit reveals nothing either way.
+	hs.fleet.instances[id].State = "terminated"
+	if got := decode[map[string]string](t, hs.do("GET", "/exits/ap-south-1/"+id, testToken, "")); got["state"] != "terminated" {
+		t.Errorf("terminated Exit state %q", got["state"])
+	}
+}
+
 func TestDeleteTerminatesPhoneExit(t *testing.T) {
 	hs := newHarness(t)
-	id := hs.fleet.add("ap-south-1", "running", map[string]string{"poof": "1", "poof:client": "android"})
+	id := hs.fleet.add("ap-south-1", "running", mine)
 	if resp := hs.do("DELETE", "/exits/ap-south-1/"+id, testToken, ""); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status %d, want 204", resp.StatusCode)
 	}
@@ -326,7 +375,7 @@ func TestDeleteTerminatesPhoneExit(t *testing.T) {
 
 func TestGetExitState(t *testing.T) {
 	hs := newHarness(t)
-	id := hs.fleet.add("sa-east-1", "running", map[string]string{"poof": "1", "poof:client": "android"})
+	id := hs.fleet.add("sa-east-1", "running", mine)
 	got := decode[map[string]string](t, hs.do("GET", "/exits/sa-east-1/"+id, testToken, ""))
 	if got["state"] != "running" {
 		t.Errorf("state %q, want running", got["state"])
@@ -362,6 +411,7 @@ func TestLogsOneLinePerRequestWithoutSecrets(t *testing.T) {
 	}
 	forbidden := map[string]string{
 		"token":            testToken,
+		"other token":      otherToken,
 		"wrong token":      "wrong-token",
 		"client key":       key,
 		"server key":       serverPriv,

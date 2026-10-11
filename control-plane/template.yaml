@@ -52,8 +52,10 @@ Resources:
                     ec2:InstanceType: t4g.nano
                     aws:RequestTag/poof: "1"
                     aws:RequestTag/poof:client: android
+                  "Null":
+                    aws:RequestTag/poof:owner: "false"
                   ForAllValues:StringEquals:
-                    aws:TagKeys: [poof, "poof:client", Name]
+                    aws:TagKeys: [poof, "poof:client", "poof:owner", Name]
               - Sid: LaunchFromAmazonAMI
                 Effect: Allow
                 Action: ec2:RunInstances
@@ -117,10 +119,10 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
-              - Sid: ReadToken
+              - Sid: ReadTokens
                 Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Sub arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/poof/control-plane/token
+                Action: ssm:GetParametersByPath
+                Resource: !Sub arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/poof/control-plane/tokens
               - Sid: OwnLogGroup
                 Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]

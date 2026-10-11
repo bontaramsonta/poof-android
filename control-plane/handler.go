@@ -25,6 +25,8 @@ import (
 const (
 	clientTagKey   = "poof:client"
 	clientTagValue = "android"
+	// ownerTagKey matches poof's exit.OwnerTagKey; poof v0.1.1 predates it.
+	ownerTagKey = "poof:owner"
 
 	serverTunnelIP  = "10.66.0.1"
 	clientTunnelIP  = "10.66.0.2"
@@ -36,7 +38,10 @@ const (
 	deadlineMargin = 5 * time.Second
 )
 
-var phoneTags = map[string]string{clientTagKey: clientTagValue}
+// phoneTags are the tags of the owner's phone Exits.
+func phoneTags(owner string) map[string]string {
+	return map[string]string{clientTagKey: clientTagValue, ownerTagKey: owner}
+}
 
 var instanceIDPattern = regexp.MustCompile(`^i-[0-9a-f]{8,17}$`)
 
@@ -53,21 +58,26 @@ type Region interface {
 
 // Handler serves the control plane API behind a Lambda function URL.
 type Handler struct {
-	tokenHash [sha256.Size]byte
-	region    func(name string) Region
-	log       *slog.Logger
+	tokenHashes map[string][sha256.Size]byte // by owner
+	region      func(name string) Region
+	log         *slog.Logger
 }
 
-// NewHandler builds a Handler. region returns the Region for an AWS
-// region name.
-func NewHandler(token string, region func(name string) Region, log *slog.Logger) *Handler {
-	return &Handler{tokenHash: sha256.Sum256([]byte(token)), region: region, log: log}
+// NewHandler builds a Handler. tokens maps each Owner to their bearer
+// token; region returns the Region for an AWS region name.
+func NewHandler(tokens map[string]string, region func(name string) Region, log *slog.Logger) *Handler {
+	hashes := make(map[string][sha256.Size]byte, len(tokens))
+	for owner, token := range tokens {
+		hashes[owner] = sha256.Sum256([]byte(token))
+	}
+	return &Handler{tokenHashes: hashes, region: region, log: log}
 }
 
 // reqLog accumulates the fields of the request's single log line.
 type reqLog struct {
 	route    string
 	status   int
+	owner    string
 	country  string
 	region   string
 	instance string
@@ -93,6 +103,9 @@ func (h *Handler) emit(ctx context.Context, rl *reqLog) {
 	attrs := []slog.Attr{
 		slog.String("route", rl.route),
 		slog.Int("status", rl.status),
+	}
+	if rl.owner != "" {
+		attrs = append(attrs, slog.String("owner", rl.owner))
 	}
 	if rl.country != "" {
 		attrs = append(attrs, slog.String("country", rl.country))
@@ -126,15 +139,17 @@ func (h *Handler) route(ctx context.Context, req events.LambdaFunctionURLRequest
 		rl.route = method + " unknown"
 	}
 
-	if !h.authorized(req.Headers) {
+	owner := h.owner(req.Headers)
+	if owner == "" {
 		return errorResponse(http.StatusUnauthorized, "unauthorized")
 	}
+	rl.owner = owner
 
 	switch rl.route {
 	case "GET /countries":
 		return h.countries()
 	case "POST /exits":
-		return h.createExit(ctx, req, rl)
+		return h.createExit(ctx, owner, req, rl)
 	case "GET /exits/{region}/{id}", "DELETE /exits/{region}/{id}":
 		region, id := parts[1], parts[2]
 		rl.region, rl.instance = region, id
@@ -142,21 +157,29 @@ func (h *Handler) route(ctx context.Context, req events.LambdaFunctionURLRequest
 			return errorResponse(http.StatusBadRequest, "unknown region or malformed instance id")
 		}
 		if method == http.MethodGet {
-			return h.getExit(ctx, region, id, rl)
+			return h.getExit(ctx, owner, region, id, rl)
 		}
-		return h.deleteExit(ctx, region, id, rl)
+		return h.deleteExit(ctx, owner, region, id, rl)
 	}
 	return errorResponse(http.StatusNotFound, "not found")
 }
 
-func (h *Handler) authorized(headers map[string]string) bool {
+// owner returns the Owner whose token the request bears, or "" if none.
+// Every token is compared, so timing doesn't reveal which one matched.
+func (h *Handler) owner(headers map[string]string) string {
 	// Function URLs lowercase header names.
 	got, ok := strings.CutPrefix(headers["authorization"], "Bearer ")
 	if !ok || got == "" {
-		return false
+		return ""
 	}
 	sum := sha256.Sum256([]byte(got))
-	return subtle.ConstantTimeCompare(sum[:], h.tokenHash[:]) == 1
+	match := ""
+	for owner, hash := range h.tokenHashes {
+		if subtle.ConstantTimeCompare(sum[:], hash[:]) == 1 {
+			match = owner
+		}
+	}
+	return match
 }
 
 func (h *Handler) countries() events.LambdaFunctionURLResponse {
@@ -182,7 +205,7 @@ type existingExit struct {
 	PublicIP   string `json:"publicIp"`
 }
 
-func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRequest, rl *reqLog) events.LambdaFunctionURLResponse {
+func (h *Handler) createExit(ctx context.Context, owner string, req events.LambdaFunctionURLRequest, rl *reqLog) events.LambdaFunctionURLResponse {
 	raw := []byte(req.Body)
 	if req.IsBase64Encoded {
 		// Function URLs base64 any body whose content type isn't textual.
@@ -207,7 +230,7 @@ func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRe
 	}
 
 	step := time.Now()
-	live, err := h.livePhoneExits(ctx)
+	live, err := h.livePhoneExits(ctx, owner)
 	rl.time("cap_check", step)
 	if err != nil {
 		rl.err = err
@@ -249,7 +272,7 @@ func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRe
 	}
 
 	step = time.Now()
-	id, err := r.RunInstance(ctx, userData, sgID, phoneTags)
+	id, err := r.RunInstance(ctx, userData, sgID, phoneTags(owner))
 	rl.time("run_instances", step)
 	if err != nil {
 		rl.err = err
@@ -285,16 +308,16 @@ func (h *Handler) createExit(ctx context.Context, req events.LambdaFunctionURLRe
 }
 
 // livePhoneExits finds pending or running phone Exits in every Country's
-// region. Any region that cannot be read fails the whole check: the cap
-// fails closed.
-func (h *Handler) livePhoneExits(ctx context.Context) ([]exit.Instance, error) {
+// region that belong to the owner. Any region that cannot be read fails
+// the whole check: the cap fails closed.
+func (h *Handler) livePhoneExits(ctx context.Context, owner string) ([]exit.Instance, error) {
 	regions := exit.AllRegions()
 	results := make([][]exit.Instance, len(regions))
 	errs := make([]error, len(regions))
 	var wg sync.WaitGroup
 	for i, name := range regions {
 		wg.Go(func() {
-			results[i], errs[i] = h.region(name).FindLive(ctx, phoneTags)
+			results[i], errs[i] = h.region(name).FindLive(ctx, phoneTags(owner))
 		})
 	}
 	wg.Wait()
@@ -308,7 +331,7 @@ func (h *Handler) livePhoneExits(ctx context.Context) ([]exit.Instance, error) {
 	return all, nil
 }
 
-func (h *Handler) getExit(ctx context.Context, region, id string, rl *reqLog) events.LambdaFunctionURLResponse {
+func (h *Handler) getExit(ctx context.Context, owner, region, id string, rl *reqLog) events.LambdaFunctionURLResponse {
 	inst, err := h.region(region).Describe(ctx, id)
 	if err != nil {
 		rl.err = err
@@ -318,10 +341,13 @@ func (h *Handler) getExit(ctx context.Context, region, id string, rl *reqLog) ev
 	if inst != nil {
 		state = inst.State
 	}
+	if state != "terminated" && inst.Tags[ownerTagKey] != owner {
+		return errorResponse(http.StatusForbidden, "not your Exit")
+	}
 	return jsonResponse(http.StatusOK, map[string]string{"state": state})
 }
 
-func (h *Handler) deleteExit(ctx context.Context, region, id string, rl *reqLog) events.LambdaFunctionURLResponse {
+func (h *Handler) deleteExit(ctx context.Context, owner, region, id string, rl *reqLog) events.LambdaFunctionURLResponse {
 	r := h.region(region)
 	inst, err := r.Describe(ctx, id)
 	if err != nil {
@@ -333,6 +359,9 @@ func (h *Handler) deleteExit(ctx context.Context, region, id string, rl *reqLog)
 	}
 	if inst.Tags[clientTagKey] != clientTagValue {
 		return errorResponse(http.StatusForbidden, "not a phone Exit")
+	}
+	if inst.Tags[ownerTagKey] != owner {
+		return errorResponse(http.StatusForbidden, "not your Exit")
 	}
 	if err := r.Terminate(ctx, id); err != nil {
 		rl.err = err

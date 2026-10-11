@@ -4,7 +4,7 @@ Run the full list before installing a build that touches the tunnel, the Session
 
 Check the instance state from the Mac with `aws ec2 describe-instances --region <region> --instance-ids <id>`.
 
-1. **Token:** fresh install; put the token in with `control-plane/token.sh` over `adb`.
+1. **Token:** fresh install; put the Owner's token in with `control-plane/token.sh <owner> --adb`, or paste it.
 2. **Connect:** pick a Country. Both notification steps appear, then Connected.
    - `ifconfig.me` in the browser shows the Exit IP.
    - A DNS leak test shows only Cloudflare, in the Exit's Country.
