@@ -267,7 +267,7 @@ The config is built in code with the library's `Interface`, `Peer` and `Config` 
 | Peer AllowedIPs | `0.0.0.0/0` |
 | Persistent keepalive | 25 s |
 
-- **Exactly one peer with a `/0` route.** GoBackend then skips `allowFamily`, and Android installs an unreachable `::/0`: IPv6 fails fast instead of leaking.
+- **Exactly one peer with a `/0` route.** GoBackend then skips `allowFamily`, and Android installs an unreachable `::/0`: IPv6 fails fast instead of leaking. See [ADR 0001](adr/0001-block-ipv6-in-phone-tunnel.md).
 - **MUST NOT add** a v6 address, a v6 route, a v6 DNS server, a second peer or a split route. Any of these allows the v6 family, and v6 then falls through outside the tunnel.
 - **MUST push a DNS server.** With none, DNS falls back to the underlying network's resolvers.
 - **Private DNS:** no handling. Strict mode sends DNS over TLS to the owner's provider over the VPN network, which is not a leak. Automatic mode uses DNS over TLS against `1.1.1.1`.
