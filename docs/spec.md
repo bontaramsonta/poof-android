@@ -10,13 +10,13 @@ Every decision here traces to a closed ticket on the [wayfinder map](https://git
 
 **Frame:**
 - **System mode only**, through Android `VpnService`. No Proxy mode.
-- **Single user** (the owner). No accounts.
-- **The phone holds no AWS credentials.** A thin control plane launches and terminates Exits. The phone authenticates with a long random bearer token.
-- **One live phone Exit at a time**, as a cost guard. CLI Exits do not count.
-- **Phone Exits and CLI Exits are interchangeable**: same `poof=1` tag, same user-data, same Dead-man's switch, built from the same exported poof packages. The CLI stays direct to EC2.
+- **Owners, no accounts.** Each Owner (`sourav`, `vaisnav`) has their own bearer token, and every Exit is tagged `poof:owner`. Owners are a convention: both hold admin on the AWS account [#27, #29].
+- **The phone holds no AWS credentials.** A thin control plane launches and terminates Exits. The phone authenticates with its Owner's long random bearer token.
+- **One live phone Exit per Owner**, as a cost guard. CLI Exits do not count.
+- **Phone Exits and CLI Exits are interchangeable**: same `poof=1` and `poof:owner` tags, same user-data, same Dead-man's switch, built from the same exported poof packages. The CLI stays direct to EC2.
 - **Sideloaded APK**, native Kotlin + Jetpack Compose, built locally with Gradle. No CI.
 
-**Out of scope:** the CLI using the control plane; multi-user or SSO; Google Play; always-on VPN and the system kill switch (they would relaunch Exits by themselves); Quick Settings tile and widget; per-app routing; saved Countries; Proxy mode; QR token handoff; CI and release signing on GitHub Actions; IPv6 through the Exit (the upgrade path is recorded on the map).
+**Out of scope:** the CLI using the control plane; user accounts or SSO; IAM-enforced Owner isolation; Google Play; always-on VPN and the system kill switch (they would relaunch Exits by themselves); Quick Settings tile and widget; per-app routing; saved Countries; Proxy mode; QR token handoff; CI and release signing on GitHub Actions; IPv6 through the Exit (the upgrade path is recorded on the map).
 
 ## 2. Architecture
 
@@ -27,7 +27,7 @@ Every decision here traces to a closed ticket on the [wayfinder map](https://git
  │ Session store (Keystore) ├────────────►│ function URL, auth NONE ├───────►│ poof user-data   │
  │ PoofVpnService (FGS)     │             │ reserved concurrency 1  │        │ Dead-man's switch│
  │  └ GoBackend tunnel ─────┼─────────────┼─────── WireGuard UDP 51820 ──────►│                  │
- └──────────────────────────┘             │ SSM: token  Logs: 7 d   │        └──────────────────┘
+ └──────────────────────────┘             │ SSM: tokens Logs: 7 d   │        └──────────────────┘
                                           └─────────────────────────┘
 ```
 
@@ -47,7 +47,9 @@ These land in poof before the control plane is built. poof-android pins the resu
 6. **Swap before `dnf`.** Done: a 1 GB swap file is on poof `main` (b6f1721). Without it, `dnf` is intermittently OOM-killed on the 512 MB nano and the Exit never answers.
 7. **Tag a release** for poof-android to pin.
 
-**Cross-client invariants** (version skew between the repos is tolerated as long as these hold): the `poof=1` tag, the security-group name `poof-wireguard`, shutdown-means-terminate, the 5 min Dead-man's switch threshold.
+**Cross-client invariants** (version skew between the repos is tolerated as long as these hold): the `poof=1` tag, the `poof:owner=<owner>` tag with the same Owner names, the security-group name `poof-wireguard`, shutdown-means-terminate, the 5 min Dead-man's switch threshold.
+
+**Owners in poof** ([ADR-0007](https://github.com/bontaramsonta/poof/blob/main/docs/adr/0007-owner-tag-by-convention.md)) are CLI-only and not needed by the control plane: `Launch` already takes extra tags. Owner names are lowercase letters, digits and dashes [#28].
 
 ## 4. Control plane
 
@@ -62,33 +64,34 @@ These land in poof before the control plane is built. poof-android pins the resu
 
 ### 4.2 Auth
 
-Every request carries `Authorization: Bearer <token>`. The Lambda reads the token from SSM SecureString `/poof/control-plane/token` once per cold start and compares in constant time. A missing or wrong token gets **401** [#11].
+Every request carries `Authorization: Bearer <token>`. Each Owner's token is an SSM SecureString at `/poof/control-plane/tokens/<owner>`. The Lambda reads them all with `GetParametersByPath` once per cold start and compares the bearer in constant time against each. The match names the request's Owner. A missing or wrong token gets **401** [#11, #29]. See [ADR 0002](adr/0002-per-owner-tokens.md).
 
 ### 4.3 API [#7]
 
 | Endpoint | Does | Returns |
 |---|---|---|
 | `GET /countries` | the Country list from poof's exported map | the 13 Countries |
-| `POST /exits` `{country, clientPublicKey}` | cap check → ensure the region's security group → generate the server keypair → render user-data → `RunInstances` → wait for a public IP | `201 {instanceId, region, publicIp, serverPublicKey}`; `409 {country, region, instanceId, publicIp}` of the existing phone Exit |
-| `GET /exits/{region}/{instanceId}` | `DescribeInstances` | `{state}` |
-| `DELETE /exits/{region}/{instanceId}` | `TerminateInstances` | `204`; refused unless the instance is tagged `poof:client=android` |
+| `POST /exits` `{country, clientPublicKey}` | cap check → ensure the region's security group → generate the server keypair → render user-data → `RunInstances` → wait for a public IP | `201 {instanceId, region, publicIp, serverPublicKey}`; `409 {country, region, instanceId, publicIp}` of the Owner's existing phone Exit |
+| `GET /exits/{region}/{instanceId}` | `DescribeInstances` | `{state}`; `403` if a live instance belongs to another Owner |
+| `DELETE /exits/{region}/{instanceId}` | `TerminateInstances` | `204`; `403` unless the instance is tagged `poof:client=android` and the caller's `poof:owner` |
 
-- **Cap:** `POST` counts `pending` or `running` instances tagged `poof:client=android` across the 13 regions. One or more → 409. CLI Exits are not counted and run side by side.
+- **Cap:** `POST` counts `pending` or `running` instances tagged `poof:client=android` and the caller's `poof:owner` across the 13 regions. One or more → 409. Other Owners' phone Exits and all CLI Exits are not counted and run side by side.
+- **Owner tag:** `POST` tags the instance `poof:owner=<owner>` inside `RunInstances`, next to `poof=1`, `poof:client=android` and `Name`.
 - **Synchronous launch.** `POST` returns at the public IP (~7–8 s measured). The phone waits out the ~47 s boot itself. A failure before the public IP makes the Lambda terminate the instance, as poof's `Launch` does.
 - **Key custody** [#6]: the phone sends only its client public key. The Lambda generates the server keypair with poof's `wgkey`, renders user-data with `RenderUserData` (server private key, client public key, tunnel IPs `10.66.0.1`/`10.66.0.2`, port 51820, `IdleShutdownMin = 5`), and returns only the server public key. Only public keys cross the network.
-- **A leaked token cannot touch CLI Exits**: `DELETE` and the IAM role both act only on `poof:client=android`.
+- **A leaked token cannot touch CLI Exits**: `DELETE` and the IAM role both act only on `poof:client=android`. It cannot touch another Owner's phone Exit either, but only because the code checks `poof:owner`; IAM sees one role.
 
 ### 4.4 IAM role [#19, #20]
 
 Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub` fills `${AWS::AccountId}`).
 
 - **Region guard:** a Deny on every EC2 call outside the 13 regions.
-- **Launch:** `t4g.nano` only, from Amazon-owned AMIs only. The request MUST tag `poof=1` and `poof:client=android`; allowed tag keys are `poof`, `poof:client`, `Name`. The security group must carry `poof=1`. No key pair, no `iam:PassRole`.
+- **Launch:** `t4g.nano` only, from Amazon-owned AMIs only. The request MUST tag `poof=1` and `poof:client=android`, and MUST carry a `poof:owner` tag (any value; the code picks it); allowed tag keys are `poof`, `poof:client`, `poof:owner`, `Name`. The security group must carry `poof=1`. No key pair, no `iam:PassRole`.
 - **Tags:** only during `RunInstances` or `CreateSecurityGroup`. Existing resources cannot be retagged, so a CLI Exit can never become terminable.
 - **Security group ensure:** create only with `poof=1`; add ingress only to groups tagged `poof=1`; no delete.
-- **Terminate:** only `poof:client=android`.
+- **Terminate:** only `poof:client=android`. The Owner check is in code (§4.3).
 - **Describe:** `DescribeInstances`, `DescribeSecurityGroups`.
-- **SSM:** the public AL2023 arm64 AMI parameter, and the token parameter. The token uses the `aws/ssm` managed key, so no KMS grant.
+- **SSM:** the public AL2023 arm64 AMI parameter, and `GetParametersByPath` on the tokens path. The tokens use the `aws/ssm` managed key, so no KMS grant.
 - **Logs:** `logs:CreateLogStream` and `logs:PutLogEvents` on the function's own log group only.
 - **Excluded:** `GetConsoleOutput`, `DeleteSecurityGroup`.
 
@@ -125,8 +128,9 @@ Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub
           "aws:RequestTag/poof": "1",
           "aws:RequestTag/poof:client": "android"
         },
+        "Null": { "aws:RequestTag/poof:owner": "false" },
         "ForAllValues:StringEquals": {
-          "aws:TagKeys": ["poof", "poof:client", "Name"]
+          "aws:TagKeys": ["poof", "poof:client", "poof:owner", "Name"]
         }
       }
     },
@@ -208,10 +212,10 @@ Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub
       "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
     },
     {
-      "Sid": "ReadToken",
+      "Sid": "ReadTokens",
       "Effect": "Allow",
-      "Action": "ssm:GetParameter",
-      "Resource": "arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/poof/control-plane/token"
+      "Action": "ssm:GetParametersByPath",
+      "Resource": "arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/poof/control-plane/tokens"
     }
   ]
 }
@@ -229,8 +233,9 @@ Least privilege. The policy goes into `template.yaml` as an inline policy (`!Sub
 
 - **AWS SAM.** `control-plane/template.yaml` holds the function (`FunctionUrlConfig: {AuthType: NONE}`, `ReservedConcurrentExecutions: 1`), its role (§4.4) and its log group (§4.5). `sam build && sam deploy` compiles and deploys. CloudFormation holds the state; one command tears it down.
 - **The deploying profile** needs CloudFormation, Lambda, IAM and SSM permissions.
-- **`control-plane/token.sh`:** generates the token with `openssl rand -base64 32`, stores it as the SSM SecureString, and prints it. It can type it into the app's token field with `adb shell input text`.
-- **Rotation:** `token.sh --rotate` overwrites the parameter and touches the function config to force a cold start. The old token dies at once; paste the new one on the phone.
+- **`control-plane/token.sh <owner>`:** generates the Owner's token with `openssl rand -base64 32`, stores it as the SSM SecureString `/poof/control-plane/tokens/<owner>`, touches the function config to force a cold start, and prints it. It can type it into the app's token field with `adb shell input text`. Another Owner's token is handed over out of band [#29].
+- **Rotation:** `token.sh <owner> --rotate` overwrites that Owner's parameter and forces a cold start. The old token dies at once; paste the new one on that phone. Other Owners are untouched.
+- **Revoke:** delete the Owner's parameter, then force a cold start.
 
 ## 5. The Exit
 
@@ -336,11 +341,12 @@ Local runs only; no CI.
 
   No instrumented or screenshot tests.
 - **Control plane, Go handler tests (`go test ./...`):** a fake EC2 behind a small interface the Lambda defines over poof's provisioner. Cases:
-  - a bad or missing token gets 401;
-  - the cap returns 409 with the existing Exit;
+  - a bad or missing token gets 401; each Owner's token resolves to that Owner;
+  - the cap returns 409 with the Owner's existing Exit; another Owner's live phone Exit does not block;
   - `DELETE` refuses an instance not tagged `poof:client=android`;
+  - `GET` and `DELETE` refuse another Owner's Exit with 403;
   - a failure before the public IP terminates the instance;
-  - launch tags carry `poof:client=android`;
+  - launch tags carry `poof:client=android` and the caller's `poof:owner`;
   - no token, key or user-data appears in any log line.
 
   `sam validate --lint` runs before every deploy. The IAM policy is proven by the first real connect.
@@ -357,6 +363,11 @@ Each step ends with its tests green.
 5. **Tunnel service:** `PoofVpnService` (`systemExempted`) holding `GoBackend`, VPN consent, `onRevoke` stop-then-`DELETE`, stats `StateFlow`, the two notifications and their Disconnect action, the network-loss check. *Test:* checklist steps 2–5 on the phone, with a bare debug screen.
 6. **Screens:** token setup, Country picker, connecting, connected, failure (with region and instance ID), 409, still running, expired; the Reconnect/Destroy flow on open. *Test:* the full [e2e checklist](testing/e2e-checklist.md).
 7. **Ship:** `./gradlew assembleRelease` (signed with the debug key), sideload, paste the token with `token.sh`. Update the README status.
+
+**Owners** [#27, #28, #29]. Steps 8 and 9 are independent; neither needs a new poof release for the other.
+
+8. **poof Owners** (in `~/p/poof`, [ADR-0007](https://github.com/bontaramsonta/poof/blob/main/docs/adr/0007-owner-tag-by-convention.md)): `owner` in `~/.config/poof/config` and `--owner`; refuse `up` and `release` without one; `poof:owner` on Exits and Static IPs; Static IP lookup and `Name` scoped per Owner; `static-ip --all` and `static-ip claim`. *Test:* unit tests for config loading, the refusal and the per-Owner lookup filter; then `poof static-ip claim india groww` as `sourav` (the address MUST NOT change) and one `poof up india --static-ip groww` as each Owner.
+9. **Control plane Owners** ([ADR 0002](adr/0002-per-owner-tokens.md)): per-Owner token load, Owner tag at launch, per-Owner cap, owner-checked `GET`/`DELETE`; the §4.4 policy changes; `token.sh <owner>`. Deploy only while no phone Exit is live: an untagged Exit would answer `GET` with 403. Move `/poof/control-plane/token` to `tokens/sourav`, deploy, then delete the old parameter. *Test:* the handler tests in §7; with `curl`, one `POST` per Owner both succeed, a cross-Owner `DELETE` → 403, each Owner's `DELETE` → 204. Then `token.sh vaisnav`, send him the release APK, and he runs checklist steps 1–3 and 11.
 
 ## 9. Assumptions made while writing
 
